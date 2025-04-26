@@ -1,0 +1,1102 @@
+import os
+import datetime
+import calendar
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from datetime import timedelta
+import glob
+
+
+class TeamsTemplateGenerator:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Teams日報テンプレート生成ツール")
+        self.root.geometry("600x700")
+        self.root.resizable(True, True)
+
+        # 保存先フォルダ
+        self.output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+
+        # テンプレートリスト
+        self.templates = []
+
+        # デフォルトのテンプレート内容
+        self.default_template = """【日報】{date}（{weekday}）
+
+■本日の業務内容
+・
+・
+・
+
+■明日の予定
+・
+・
+・
+
+■その他共有事項
+・
+"""
+        # テンプレートの内容
+        self.template_content = self.default_template
+
+        # 現在のテンプレート情報
+        self.templates.append(
+            {
+                "name": "デフォルトテンプレート",
+                "content": self.default_template,
+                "active": True,
+            }
+        )
+
+        # 日本語の曜日名
+        self.weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
+
+        # GUIコンポーネントの作成
+        self.create_widgets()
+
+    def create_widgets(self):
+        # メインフレーム
+        main_frame = ttk.Frame(self.root, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # タイトルラベル
+        title_label = ttk.Label(
+            main_frame, text="Teams日報テンプレート生成ツール", font=("", 14, "bold")
+        )
+        title_label.pack(pady=10)
+
+        # タブコントロール
+        tab_control = ttk.Notebook(main_frame)
+        tab_control.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        # 各タブのフレーム
+        tab_generate = ttk.Frame(tab_control)
+        tab_template = ttk.Frame(tab_control)
+
+        tab_control.add(tab_generate, text="テンプレート生成")
+        tab_control.add(tab_template, text="テンプレート管理")
+
+        # 生成タブの内容
+        self.create_generate_tab(tab_generate)
+
+        # テンプレート管理タブの内容
+        self.create_template_tab(tab_template)
+
+    def create_generate_tab(self, parent):
+        # スクロール可能なキャンバスを作成
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # 以下、元のコードを scrollable_frame に配置
+        mode_frame = ttk.LabelFrame(scrollable_frame, text="日報作成モード", padding=10)
+        mode_frame.pack(fill=tk.X, pady=10)
+
+        self.gen_mode_var = tk.StringVar(value="single")
+        ttk.Radiobutton(
+            mode_frame,
+            text="単一の日付",
+            variable=self.gen_mode_var,
+            value="single",
+            command=self.toggle_gen_mode,
+        ).pack(anchor=tk.W)
+        ttk.Radiobutton(
+            mode_frame,
+            text="複数日（月指定）",
+            variable=self.gen_mode_var,
+            value="month",
+            command=self.toggle_gen_mode,
+        ).pack(anchor=tk.W)
+        ttk.Radiobutton(
+            mode_frame,
+            text="日付範囲指定",
+            variable=self.gen_mode_var,
+            value="range",
+            command=self.toggle_gen_mode,
+        ).pack(anchor=tk.W)
+
+        # 現在の日付を取得
+        now = datetime.datetime.now()
+
+        # 単一日モードのフレーム
+        self.single_date_frame = ttk.LabelFrame(
+            scrollable_frame, text="単一日指定", padding=10
+        )
+        self.single_date_frame.pack(fill=tk.X, pady=10)
+
+        date_select_frame = ttk.Frame(self.single_date_frame)
+        date_select_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(date_select_frame, text="年：").grid(row=0, column=0, padx=5, pady=5)
+        self.year_var = tk.StringVar(value=str(now.year))
+        ttk.Spinbox(
+            date_select_frame, from_=2000, to=2100, textvariable=self.year_var, width=8
+        ).grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(date_select_frame, text="月：").grid(row=0, column=2, padx=5, pady=5)
+        self.month_var = tk.StringVar(value=str(now.month))
+        self.month_spinbox = ttk.Spinbox(
+            date_select_frame,
+            from_=1,
+            to=12,
+            textvariable=self.month_var,
+            width=5,
+            command=self.update_day_range,
+        )
+        self.month_spinbox.grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Label(date_select_frame, text="日：").grid(row=0, column=4, padx=5, pady=5)
+        self.day_var = tk.StringVar(value=str(now.day))
+        self.day_spinbox = ttk.Spinbox(
+            date_select_frame, from_=1, to=31, textvariable=self.day_var, width=5
+        )
+        self.day_spinbox.grid(row=0, column=5, padx=5, pady=5)
+
+        # 今日/明日/明後日ボタン
+        quick_date_frame = ttk.Frame(self.single_date_frame)
+        quick_date_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Button(
+            quick_date_frame, text="今日", command=lambda: self.set_relative_date(0)
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            quick_date_frame, text="明日", command=lambda: self.set_relative_date(1)
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            quick_date_frame, text="明後日", command=lambda: self.set_relative_date(2)
+        ).pack(side=tk.LEFT, padx=5)
+
+        # 月指定モードのフレーム
+        self.month_date_frame = ttk.LabelFrame(
+            scrollable_frame, text="月指定", padding=10
+        )
+
+        month_select_frame = ttk.Frame(self.month_date_frame)
+        month_select_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(month_select_frame, text="年：").grid(row=0, column=0, padx=5, pady=5)
+        self.month_year_var = tk.StringVar(value=str(now.year))
+        ttk.Spinbox(
+            month_select_frame,
+            from_=2000,
+            to=2100,
+            textvariable=self.month_year_var,
+            width=8,
+        ).grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(month_select_frame, text="月：").grid(row=0, column=2, padx=5, pady=5)
+        self.month_month_var = tk.StringVar(value=str(now.month))
+        ttk.Spinbox(
+            month_select_frame,
+            from_=1,
+            to=12,
+            textvariable=self.month_month_var,
+            width=5,
+        ).grid(row=0, column=3, padx=5, pady=5)
+
+        # 月指定のオプション
+        month_option_frame = ttk.Frame(self.month_date_frame)
+        month_option_frame.pack(fill=tk.X, pady=5)
+
+        self.weekday_only_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            month_option_frame,
+            text="平日のみ（土日を除く）",
+            variable=self.weekday_only_var,
+        ).pack(anchor=tk.W)
+
+        # 日付範囲指定モードのフレーム
+        self.range_date_frame = ttk.LabelFrame(
+            scrollable_frame, text="日付範囲指定", padding=10
+        )
+
+        # 開始日
+        start_frame = ttk.LabelFrame(self.range_date_frame, text="開始日", padding=5)
+        start_frame.pack(fill=tk.X, pady=5)
+
+        start_select_frame = ttk.Frame(start_frame)
+        start_select_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(start_select_frame, text="年：").grid(row=0, column=0, padx=5, pady=5)
+        self.start_year_var = tk.StringVar(value=str(now.year))
+        ttk.Spinbox(
+            start_select_frame,
+            from_=2000,
+            to=2100,
+            textvariable=self.start_year_var,
+            width=8,
+        ).grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(start_select_frame, text="月：").grid(row=0, column=2, padx=5, pady=5)
+        self.start_month_var = tk.StringVar(value=str(now.month))
+        self.start_month_spinbox = ttk.Spinbox(
+            start_select_frame,
+            from_=1,
+            to=12,
+            textvariable=self.start_month_var,
+            width=5,
+            command=lambda: self.update_range_day("start"),
+        )
+        self.start_month_spinbox.grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Label(start_select_frame, text="日：").grid(row=0, column=4, padx=5, pady=5)
+        self.start_day_var = tk.StringVar(value=str(now.day))
+        self.start_day_spinbox = ttk.Spinbox(
+            start_select_frame, from_=1, to=31, textvariable=self.start_day_var, width=5
+        )
+        self.start_day_spinbox.grid(row=0, column=5, padx=5, pady=5)
+
+        # 終了日
+        end_frame = ttk.LabelFrame(self.range_date_frame, text="終了日", padding=5)
+        end_frame.pack(fill=tk.X, pady=5)
+
+        end_select_frame = ttk.Frame(end_frame)
+        end_select_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(end_select_frame, text="年：").grid(row=0, column=0, padx=5, pady=5)
+        self.end_year_var = tk.StringVar(value=str(now.year))
+        ttk.Spinbox(
+            end_select_frame,
+            from_=2000,
+            to=2100,
+            textvariable=self.end_year_var,
+            width=8,
+        ).grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(end_select_frame, text="月：").grid(row=0, column=2, padx=5, pady=5)
+        self.end_month_var = tk.StringVar(value=str(now.month))
+        self.end_month_spinbox = ttk.Spinbox(
+            end_select_frame,
+            from_=1,
+            to=12,
+            textvariable=self.end_month_var,
+            width=5,
+            command=lambda: self.update_range_day("end"),
+        )
+        self.end_month_spinbox.grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Label(end_select_frame, text="日：").grid(row=0, column=4, padx=5, pady=5)
+        self.end_day_var = tk.StringVar(
+            value=str(min(now.day + 7, calendar.monthrange(now.year, now.month)[1]))
+        )
+        self.end_day_spinbox = ttk.Spinbox(
+            end_select_frame, from_=1, to=31, textvariable=self.end_day_var, width=5
+        )
+        self.end_day_spinbox.grid(row=0, column=5, padx=5, pady=5)
+
+        # 範囲指定のオプション
+        range_option_frame = ttk.Frame(self.range_date_frame)
+        range_option_frame.pack(fill=tk.X, pady=5)
+
+        self.range_weekday_only_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            range_option_frame,
+            text="平日のみ（土日を除く）",
+            variable=self.range_weekday_only_var,
+        ).pack(anchor=tk.W)
+
+        # 保存先フォルダ選択
+        folder_frame = ttk.LabelFrame(
+            scrollable_frame, text="保存先フォルダ", padding=10
+        )
+        folder_frame.pack(fill=tk.X, pady=10)
+
+        self.folder_var = tk.StringVar(value=self.output_dir)
+
+        folder_entry = ttk.Entry(folder_frame, textvariable=self.folder_var, width=50)
+        folder_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+        browse_button = ttk.Button(
+            folder_frame, text="参照...", command=self.browse_folder
+        )
+        browse_button.pack(side=tk.RIGHT)
+
+        # テンプレート選択フレーム
+        template_select_frame = ttk.LabelFrame(
+            scrollable_frame, text="使用するテンプレート", padding=10
+        )
+        template_select_frame.pack(fill=tk.X, pady=10)
+
+        self.template_listbox = tk.Listbox(
+            template_select_frame, height=3, selectmode=tk.MULTIPLE
+        )
+        self.template_listbox.pack(fill=tk.X, expand=True, pady=5)
+
+        # 初期テンプレートをリストに追加
+        self.update_template_listbox()
+
+        # プレビューエリア
+        preview_frame = ttk.LabelFrame(scrollable_frame, text="生成情報", padding=10)
+        preview_frame.pack(fill=tk.X, pady=10)
+
+        self.preview_var = tk.StringVar()
+        preview_label = ttk.Label(
+            preview_frame, textvariable=self.preview_var, wraplength=550
+        )
+        preview_label.pack(fill=tk.X, pady=5)
+
+        # ボタンフレームを親フレームに直接配置
+        button_frame = ttk.Frame(parent)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+
+        # プレビューボタン
+        preview_button = ttk.Button(
+            button_frame, text="プレビュー表示", command=self.preview_generate
+        )
+        preview_button.pack(side=tk.LEFT, padx=5)
+
+        # 生成ボタン
+        generate_button = ttk.Button(
+            button_frame, text="テンプレートを生成", command=self.generate_templates
+        )
+        generate_button.pack(side=tk.RIGHT, padx=5)
+
+        # 初期状態の設定
+        self.toggle_gen_mode()
+        self.update_day_range()
+        self.update_range_day("start")
+        self.update_range_day("end")
+
+    def create_template_tab(self, parent):
+        # テンプレートリストフレーム
+        list_frame = ttk.LabelFrame(parent, text="テンプレート一覧", padding=10)
+        list_frame.pack(fill=tk.X, pady=10)
+
+        self.template_mgr_listbox = tk.Listbox(list_frame, height=5)
+        self.template_mgr_listbox.pack(fill=tk.X, expand=True, pady=5)
+        self.template_mgr_listbox.bind("<<ListboxSelect>>", self.on_template_select)
+
+        # 初期テンプレートをリストに追加
+        self.update_template_mgr_listbox()
+
+        # テンプレート操作ボタン
+        template_button_frame = ttk.Frame(list_frame)
+        template_button_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Button(
+            template_button_frame, text="新規作成", command=self.new_template
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            template_button_frame, text="名前変更", command=self.rename_template
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            template_button_frame, text="削除", command=self.delete_template
+        ).pack(side=tk.LEFT, padx=5)
+
+        # テンプレート読み込み・保存ボタン
+        io_button_frame = ttk.Frame(list_frame)
+        io_button_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Button(
+            io_button_frame,
+            text="ファイルから読み込み",
+            command=self.load_template_from_file,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            io_button_frame, text="ファイルに保存", command=self.save_template_to_file
+        ).pack(side=tk.LEFT, padx=5)
+
+        # テンプレート編集エリア
+        edit_frame = ttk.LabelFrame(parent, text="テンプレート編集", padding=10)
+        edit_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        self.template_name_var = tk.StringVar()
+        name_frame = ttk.Frame(edit_frame)
+        name_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(name_frame, text="テンプレート名:").pack(side=tk.LEFT, padx=5)
+        ttk.Entry(name_frame, textvariable=self.template_name_var, width=40).pack(
+            side=tk.LEFT, padx=5, fill=tk.X, expand=True
+        )
+
+        # スクロールバー付きテキストウィジェット
+        template_scroll = ttk.Scrollbar(edit_frame)
+        template_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.template_edit_text = tk.Text(
+            edit_frame, height=15, width=60, yscrollcommand=template_scroll.set
+        )
+        self.template_edit_text.pack(fill=tk.BOTH, expand=True)
+        template_scroll.config(command=self.template_edit_text.yview)
+
+        # ヘルプテキスト
+        help_frame = ttk.Frame(edit_frame)
+        help_frame.pack(fill=tk.X, pady=5)
+
+        help_text = ttk.Label(
+            help_frame,
+            text="{date}は日付、{weekday}は曜日に置き換えられます",
+            font=("", 9),
+        )
+        help_text.pack(anchor=tk.W)
+
+        # テンプレートプレビューエリア
+        preview_frame = ttk.LabelFrame(
+            parent, text="テンプレートプレビュー", padding=10
+        )
+        preview_frame.pack(fill=tk.X, pady=10)
+
+        # スクロールバー付きテキストウィジェット
+        preview_scroll = ttk.Scrollbar(preview_frame)
+        preview_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.template_preview_text = tk.Text(
+            preview_frame,
+            height=8,
+            width=60,
+            yscrollcommand=preview_scroll.set,
+            state=tk.DISABLED,
+        )
+        self.template_preview_text.pack(fill=tk.X, expand=True)
+        preview_scroll.config(command=self.template_preview_text.yview)
+
+        # ボタンフレーム
+        button_frame = ttk.Frame(parent)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        # プレビューボタン
+        preview_button = ttk.Button(
+            button_frame, text="プレビュー表示", command=self.preview_template
+        )
+        preview_button.pack(side=tk.LEFT, padx=5)
+
+        # 保存ボタン
+        save_button = ttk.Button(
+            button_frame, text="テンプレートを保存", command=self.save_template
+        )
+        save_button.pack(side=tk.RIGHT, padx=5)
+
+    def toggle_gen_mode(self):
+        mode = self.gen_mode_var.get()
+
+        # 全てのフレームを非表示
+        self.single_date_frame.pack_forget()
+        if hasattr(self, "month_date_frame"):
+            self.month_date_frame.pack_forget()
+        if hasattr(self, "range_date_frame"):
+            self.range_date_frame.pack_forget()
+
+        # 選択されたモードのフレームを表示
+        if mode == "single":
+            self.single_date_frame.pack(
+                fill=tk.X,
+                pady=10,
+                after=self.root.nametowidget(
+                    str(self.single_date_frame.master)
+                ).children["!labelframe"],
+            )
+        elif mode == "month":
+            self.month_date_frame.pack(
+                fill=tk.X,
+                pady=10,
+                after=self.root.nametowidget(
+                    str(self.month_date_frame.master)
+                ).children["!labelframe"],
+            )
+        elif mode == "range":
+            self.range_date_frame.pack(
+                fill=tk.X,
+                pady=10,
+                after=self.root.nametowidget(
+                    str(self.range_date_frame.master)
+                ).children["!labelframe"],
+            )
+
+    def update_day_range(self):
+        try:
+            year = int(self.year_var.get())
+            month = int(self.month_var.get())
+
+            # 月の最終日を取得
+            _, last_day = calendar.monthrange(year, month)
+
+            # 日のスピンボックスの範囲を更新
+            self.day_spinbox.config(to=last_day)
+
+            # 現在の日が月の最終日を超えていたら、最終日に設定
+            current_day = int(self.day_var.get())
+            if current_day > last_day:
+                self.day_var.set(str(last_day))
+
+        except ValueError:
+            pass
+
+    def update_range_day(self, which):
+        try:
+            if which == "start":
+                year = int(self.start_year_var.get())
+                month = int(self.start_month_var.get())
+
+                # 月の最終日を取得
+                _, last_day = calendar.monthrange(year, month)
+
+                # 日のスピンボックスの範囲を更新
+                self.start_day_spinbox.config(to=last_day)
+
+                # 現在の日が月の最終日を超えていたら、最終日に設定
+                current_day = int(self.start_day_var.get())
+                if current_day > last_day:
+                    self.start_day_var.set(str(last_day))
+            else:  # end
+                year = int(self.end_year_var.get())
+                month = int(self.end_month_var.get())
+
+                # 月の最終日を取得
+                _, last_day = calendar.monthrange(year, month)
+
+                # 日のスピンボックスの範囲を更新
+                self.end_day_spinbox.config(to=last_day)
+
+                # 現在の日が月の最終日を超えていたら、最終日に設定
+                current_day = int(self.end_day_var.get())
+                if current_day > last_day:
+                    self.end_day_var.set(str(last_day))
+
+        except ValueError:
+            pass
+
+    def set_relative_date(self, days_offset):
+        today = datetime.datetime.now()
+        target_date = today + datetime.timedelta(days=days_offset)
+
+        self.year_var.set(str(target_date.year))
+        self.month_var.set(str(target_date.month))
+        self.day_var.set(str(target_date.day))
+
+        self.update_day_range()
+
+    def browse_folder(self):
+        folder_selected = filedialog.askdirectory(initialdir=self.output_dir)
+        if folder_selected:
+            self.output_dir = folder_selected
+            self.folder_var.set(folder_selected)
+
+    def update_template_listbox(self):
+        self.template_listbox.delete(0, tk.END)
+        for template in self.templates:
+            self.template_listbox.insert(tk.END, template["name"])
+
+        # デフォルトテンプレートを選択
+        if self.templates:
+            self.template_listbox.selection_set(0)
+
+    def update_template_mgr_listbox(self):
+        self.template_mgr_listbox.delete(0, tk.END)
+        for template in self.templates:
+            self.template_mgr_listbox.insert(tk.END, template["name"])
+
+    def on_template_select(self, event):
+        selection = self.template_mgr_listbox.curselection()
+        if selection:
+            index = selection[0]
+            template = self.templates[index]
+
+            self.template_name_var.set(template["name"])
+            self.template_edit_text.delete(1.0, tk.END)
+            self.template_edit_text.insert(tk.END, template["content"])
+
+    def new_template(self):
+        # 新しいテンプレートを追加
+        new_name = f"新規テンプレート{len(self.templates) + 1}"
+        self.templates.append(
+            {"name": new_name, "content": self.default_template, "active": True}
+        )
+
+        # リストボックス更新
+        self.update_template_mgr_listbox()
+        self.update_template_listbox()
+
+        # 新しいテンプレートを選択
+        self.template_mgr_listbox.selection_clear(0, tk.END)
+        self.template_mgr_listbox.selection_set(len(self.templates) - 1)
+        self.on_template_select(None)
+
+    def rename_template(self):
+        selection = self.template_mgr_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("警告", "テンプレートを選択してください")
+            return
+
+        index = selection[0]
+
+        # 名前の変更
+        new_name = self.template_name_var.get()
+        if not new_name:
+            messagebox.showwarning("警告", "テンプレート名を入力してください")
+            return
+
+        self.templates[index]["name"] = new_name
+
+        # リストボックス更新
+        self.update_template_mgr_listbox()
+        self.update_template_listbox()
+
+        # 同じテンプレートを再選択
+        self.template_mgr_listbox.selection_clear(0, tk.END)
+        self.template_mgr_listbox.selection_set(index)
+
+    def delete_template(self):
+        selection = self.template_mgr_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("警告", "テンプレートを選択してください")
+            return
+
+        index = selection[0]
+
+        # デフォルトテンプレートは削除不可
+        if index == 0:
+            messagebox.showwarning("警告", "デフォルトテンプレートは削除できません")
+            return
+
+        # 確認ダイアログ
+        if not messagebox.askyesno(
+            "確認", f"テンプレート「{self.templates[index]['name']}」を削除しますか？"
+        ):
+            return
+
+        # テンプレート削除
+        del self.templates[index]
+
+        # リストボックス更新
+        self.update_template_mgr_listbox()
+        self.update_template_listbox()
+
+        # デフォルトテンプレートを選択
+        self.template_mgr_listbox.selection_clear(0, tk.END)
+        self.template_mgr_listbox.selection_set(0)
+        self.on_template_select(None)
+
+    def load_template_from_file(self):
+        file_path = filedialog.askopenfilename(
+            initialdir=self.output_dir,
+            title="テンプレートファイルを開く",
+            filetypes=(("テキストファイル", "*.txt"), ("すべてのファイル", "*.*")),
+        )
+
+        if file_path:
+            try:
+                # ファイルを読み込む
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                # テンプレートとして使えるか確認
+                try:
+                    date_str = "2023年1月1日"
+                    weekday = "月"
+                    content.format(date=date_str, weekday=weekday)
+
+                    # ファイル名からテンプレート名を生成
+                    template_name = os.path.splitext(os.path.basename(file_path))[0]
+
+                    # テンプレートの追加
+                    self.templates.append(
+                        {"name": template_name, "content": content, "active": True}
+                    )
+
+                    # リストボックス更新 - 両方のタブのリストを更新
+                    self.update_template_mgr_listbox()
+                    self.update_template_listbox()
+
+                    # 新しいテンプレートを選択 - 管理タブ
+                    self.template_mgr_listbox.selection_clear(0, tk.END)
+                    self.template_mgr_listbox.selection_set(len(self.templates) - 1)
+                    self.on_template_select(None)
+                    
+                    # 生成タブでも新しいテンプレートを選択できるようにする
+                    self.template_listbox.selection_set(len(self.templates) - 1)
+                    
+                    messagebox.showinfo(
+                        "成功", f"テンプレート「{template_name}」を読み込みました"
+                    )
+
+                except KeyError as e:
+                    messagebox.showerror("エラー", f"無効なテンプレートです: {str(e)}")
+                except Exception as e:
+                    messagebox.showerror(
+                        "エラー",
+                        f"テンプレートの確認中にエラーが発生しました: {str(e)}",
+                    )
+
+            except Exception as e:
+                messagebox.showerror(
+                    "エラー", f"ファイルの読み込みに失敗しました: {str(e)}"
+                )
+
+    def save_template_to_file(self):
+        selection = self.template_mgr_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("警告", "テンプレートを選択してください")
+            return
+
+        index = selection[0]
+        template = self.templates[index]
+
+        file_path = filedialog.asksaveasfilename(
+            initialdir=self.output_dir,
+            title="テンプレートを保存",
+            defaultextension=".txt",
+            initialfile=template["name"],
+            filetypes=(("テキストファイル", "*.txt"), ("すべてのファイル", "*.*")),
+        )
+
+        if file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(template["content"])
+
+                messagebox.showinfo("成功", f"テンプレートを保存しました:\n{file_path}")
+
+            except Exception as e:
+                messagebox.showerror(
+                    "エラー", f"ファイルの保存に失敗しました: {str(e)}"
+                )
+
+    def preview_template(self):
+        try:
+            # テンプレート内容を取得
+            template_text = self.template_edit_text.get(1.0, tk.END)
+
+            # テンプレートをチェック
+            try:
+                # 現在の日付でプレビュー
+                now = datetime.datetime.now()
+                date_str = f"{now.year}年{now.month}月{now.day}日"
+                weekday = self.weekdays_jp[now.weekday()]
+
+                # プレビュー内容
+                preview_content = template_text.format(date=date_str, weekday=weekday)
+
+                # プレビューを表示
+                self.template_preview_text.config(state=tk.NORMAL)
+                self.template_preview_text.delete(1.0, tk.END)
+                self.template_preview_text.insert(tk.END, preview_content)
+                self.template_preview_text.config(state=tk.DISABLED)
+
+            except KeyError as e:
+                messagebox.showerror(
+                    "エラー", f"テンプレートに無効な項目があります: {str(e)}"
+                )
+            except Exception as e:
+                messagebox.showerror(
+                    "エラー",
+                    f"テンプレートのプレビュー中にエラーが発生しました: {str(e)}",
+                )
+
+        except Exception as e:
+            messagebox.showerror("エラー", f"予期しないエラーが発生しました: {str(e)}")
+
+    def save_template(self):
+        selection = self.template_mgr_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("警告", "テンプレートを選択してください")
+            return
+
+        index = selection[0]
+
+        # テンプレート内容を取得
+        template_text = self.template_edit_text.get(1.0, tk.END)
+        template_name = self.template_name_var.get()
+
+        if not template_name:
+            messagebox.showwarning("警告", "テンプレート名を入力してください")
+            return
+
+        # テンプレートをチェック
+        try:
+            date_str = "2023年1月1日"
+            weekday = "月"
+            template_text.format(date=date_str, weekday=weekday)
+        except KeyError as e:
+            messagebox.showerror(
+                "エラー", f"テンプレートに無効な項目があります: {str(e)}"
+            )
+            return
+        except Exception as e:
+            messagebox.showerror(
+                "エラー", f"テンプレートの確認中にエラーが発生しました: {str(e)}"
+            )
+            return
+
+        # テンプレートを更新
+        self.templates[index]["name"] = template_name
+        self.templates[index]["content"] = template_text
+
+        # リストボックス更新
+        self.update_template_mgr_listbox()
+        self.update_template_listbox()
+
+        messagebox.showinfo("成功", f"テンプレート「{template_name}」を保存しました")
+
+    def preview_generate(self):
+        try:
+            # 選択されたテンプレートを取得
+            selected_indices = self.template_listbox.curselection()
+            if not selected_indices:
+                messagebox.showwarning("警告", "テンプレートを選択してください")
+                return
+
+            selected_templates = [self.templates[i] for i in selected_indices]
+
+            # 日付情報を取得
+            mode = self.gen_mode_var.get()
+
+            if mode == "single":
+                # 単一日モード
+                year = int(self.year_var.get())
+                month = int(self.month_var.get())
+                day = int(self.day_var.get())
+
+                try:
+                    date = datetime.date(year, month, day)
+                except ValueError:
+                    messagebox.showerror("エラー", "無効な日付です")
+                    return
+
+                total_files = len(selected_templates)
+
+                # プレビュー表示
+                self.preview_var.set(
+                    f"作成するファイル数: {total_files}個\n"
+                    f"日付: {year}年{month}月{day}日（{self.weekdays_jp[date.weekday()]}）\n"
+                    f"使用テンプレート: {', '.join(t['name'] for t in selected_templates)}"
+                )
+
+            elif mode == "month":
+                # 月指定モード
+                year = int(self.month_year_var.get())
+                month = int(self.month_month_var.get())
+
+                # 月の日数を取得
+                _, days_in_month = calendar.monthrange(year, month)
+
+                # 日付カウント
+                dates = []
+                for day in range(1, days_in_month + 1):
+                    date = datetime.date(year, month, day)
+
+                    # 平日のみオプションの考慮
+                    if self.weekday_only_var.get() and date.weekday() >= 5:
+                        continue
+
+                    dates.append(date)
+
+                total_files = len(dates) * len(selected_templates)
+
+                # プレビュー表示
+                self.preview_var.set(
+                    f"作成するファイル数: {total_files}個\n"
+                    f"期間: {year}年{month}月（{len(dates)}日分）\n"
+                    f"使用テンプレート: {', '.join(t['name'] for t in selected_templates)}\n"
+                    f"ファイル名例: Teams_日報_{year}年{month}月1日.txt など"
+                )
+
+            elif mode == "range":
+                # 日付範囲モード
+                start_year = int(self.start_year_var.get())
+                start_month = int(self.start_month_var.get())
+                start_day = int(self.start_day_var.get())
+
+                end_year = int(self.end_year_var.get())
+                end_month = int(self.end_month_var.get())
+                end_day = int(self.end_day_var.get())
+
+                try:
+                    start_date = datetime.date(start_year, start_month, start_day)
+                    end_date = datetime.date(end_year, end_month, end_day)
+                except ValueError:
+                    messagebox.showerror("エラー", "無効な日付です")
+                    return
+
+                if start_date > end_date:
+                    messagebox.showerror("エラー", "開始日が終了日より後になっています")
+                    return
+
+                # 日付リストを作成
+                dates = []
+                current_date = start_date
+                while current_date <= end_date:
+                    # 平日のみオプションの考慮
+                    if (
+                        self.range_weekday_only_var.get()
+                        and current_date.weekday() >= 5
+                    ):
+                        current_date += datetime.timedelta(days=1)
+                        continue
+
+                    dates.append(current_date)
+                    current_date += datetime.timedelta(days=1)
+
+                total_files = len(dates) * len(selected_templates)
+
+                # プレビュー表示
+                self.preview_var.set(
+                    f"作成するファイル数: {total_files}個\n"
+                    f"期間: {start_year}年{start_month}月{start_day}日～{end_year}年{end_month}月{end_day}日（{len(dates)}日分）\n"
+                    f"使用テンプレート: {', '.join(t['name'] for t in selected_templates)}"
+                )
+
+        except ValueError as e:
+            messagebox.showerror("エラー", f"入力値が正しくありません: {str(e)}")
+        except Exception as e:
+            messagebox.showerror("エラー", f"予期しないエラーが発生しました: {str(e)}")
+
+    def generate_templates(self):
+        try:
+            # 出力ディレクトリの確認
+            output_dir = self.folder_var.get()
+            if not os.path.exists(output_dir):
+                messagebox.showerror(
+                    "エラー", f"指定されたフォルダが存在しません: {output_dir}"
+                )
+                return
+
+            # 選択されたテンプレートを取得
+            selected_indices = self.template_listbox.curselection()
+            if not selected_indices:
+                messagebox.showwarning("警告", "テンプレートを選択してください")
+                return
+
+            selected_templates = [self.templates[i] for i in selected_indices]
+
+            # 日付情報を取得
+            mode = self.gen_mode_var.get()
+
+            # 日付リストを作成
+            dates = []
+
+            if mode == "single":
+                # 単一日モード
+                year = int(self.year_var.get())
+                month = int(self.month_var.get())
+                day = int(self.day_var.get())
+
+                try:
+                    date = datetime.date(year, month, day)
+                    dates.append(date)
+                except ValueError:
+                    messagebox.showerror("エラー", "無効な日付です")
+                    return
+
+            elif mode == "month":
+                # 月指定モード
+                year = int(self.month_year_var.get())
+                month = int(self.month_month_var.get())
+
+                # 月の日数を取得
+                _, days_in_month = calendar.monthrange(year, month)
+
+                for day in range(1, days_in_month + 1):
+                    date = datetime.date(year, month, day)
+
+                    # 平日のみオプションの考慮
+                    if self.weekday_only_var.get() and date.weekday() >= 5:
+                        continue
+
+                    dates.append(date)
+
+            elif mode == "range":
+                # 日付範囲モード
+                start_year = int(self.start_year_var.get())
+                start_month = int(self.start_month_var.get())
+                start_day = int(self.start_day_var.get())
+
+                end_year = int(self.end_year_var.get())
+                end_month = int(self.end_month_var.get())
+                end_day = int(self.end_day_var.get())
+
+                try:
+                    start_date = datetime.date(start_year, start_month, start_day)
+                    end_date = datetime.date(end_year, end_month, end_day)
+                except ValueError:
+                    messagebox.showerror("エラー", "無効な日付です")
+                    return
+
+                if start_date > end_date:
+                    messagebox.showerror("エラー", "開始日が終了日より後になっています")
+                    return
+
+                # 日付リストを作成
+                current_date = start_date
+                while current_date <= end_date:
+                    # 平日のみオプションの考慮
+                    if (
+                        self.range_weekday_only_var.get()
+                        and current_date.weekday() >= 5
+                    ):
+                        current_date += datetime.timedelta(days=1)
+                        continue
+
+                    dates.append(current_date)
+                    current_date += datetime.timedelta(days=1)
+
+            # 総ファイル数
+            total_files = len(dates) * len(selected_templates)
+
+            # 確認ダイアログ
+            if not messagebox.askyesno(
+                "確認", f"{total_files}個のファイルを作成します。\n続行しますか？"
+            ):
+                return
+
+            # ファイル生成
+            created_files = []
+
+            for date in dates:
+                for template in selected_templates:
+                    # 日付情報
+                    year = date.year
+                    month = date.month
+                    day = date.day
+                    weekday = self.weekdays_jp[date.weekday()]
+
+                    date_str = f"{year}年{month}月{day}日"
+
+                    # テンプレート名をファイル名の一部に使用
+                    template_suffix = ""
+                    if len(selected_templates) > 1:
+                        template_suffix = f"_{template['name']}"
+
+                    filename = f"Teams_日報_{date_str}{template_suffix}.txt"
+                    filepath = os.path.join(output_dir, filename)
+
+                    # ファイル内容
+                    content = template["content"].format(date=date_str, weekday=weekday)
+
+                    # ファイル書き込み
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(content)
+
+                    created_files.append(filename)
+
+            messagebox.showinfo(
+                "完了",
+                f"{len(created_files)}個のテンプレートを作成しました。\n保存先: {output_dir}",
+            )
+
+        except ValueError as e:
+            messagebox.showerror("エラー", f"入力値が正しくありません: {str(e)}")
+        except KeyError as e:
+            messagebox.showerror(
+                "エラー", f"テンプレートに無効な項目があります: {str(e)}"
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", f"エラーが発生しました: {str(e)}")
+
+
+# アプリケーション起動
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TeamsTemplateGenerator(root)
+    root.mainloop()
+
+{"window.zoomLevel": "1"}
